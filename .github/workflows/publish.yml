@@ -41,6 +41,7 @@ jobs:
       - name: Run the publisher
         working-directory: publisher
         env:
+          CLIP_GITHUB_READ_TOKEN: ${{ github.token }}
           YOUTUBE_GRANT: ${{ secrets.YOUTUBE_GRANT_B64 }}
           PREVIEW: ${{ github.event_name == 'workflow_dispatch' && inputs.preview }}
         run: |
