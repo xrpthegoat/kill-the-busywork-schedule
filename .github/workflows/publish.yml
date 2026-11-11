@@ -29,12 +29,8 @@ jobs:
       - name: Install renderer dependencies
         working-directory: publisher
         run: |
-          if ! command -v ffmpeg || [ ! -f /usr/share/fonts/truetype/liberation2/LiberationSans-Regular.ttf ]; then
-            sudo apt-get update -qq
-            sudo apt-get install -y -qq ffmpeg fonts-liberation2
-          fi
           python3 -m venv "$RUNNER_TEMP/clip-venv"
-          "$RUNNER_TEMP/clip-venv/bin/python" -m pip install --quiet -r requirements-cloud.txt
+          "$RUNNER_TEMP/clip-venv/bin/python" -m pip install --disable-pip-version-check --timeout 15 --retries 2 --quiet -r requirements-cloud.txt
       - name: Restore publishing state
         working-directory: publisher
         run: |
@@ -55,6 +51,8 @@ jobs:
           trap 'unlink "$CLIP_OAUTH_FILE"' EXIT
           printf '%s' "$YOUTUBE_GRANT" | base64 --decode > "$CLIP_OAUTH_FILE"
           unset YOUTUBE_GRANT
+          CLIP_FFMPEG="$("$RUNNER_TEMP/clip-venv/bin/python" -c 'import imageio_ffmpeg; print(imageio_ffmpeg.get_ffmpeg_exe())')"
+          export CLIP_FFMPEG
           args=("$RUNNER_TEMP/clip-state")
           if [ "$PREVIEW" = true ]; then args+=(--preview); fi
           "$RUNNER_TEMP/clip-venv/bin/python" -u cloud_worker.py "${args[@]}"
