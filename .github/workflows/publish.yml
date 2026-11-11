@@ -1,0 +1,78 @@
+name: Publish Kill the Busywork
+on:
+  schedule:
+    - cron: '17 1,7,13,19 * * *'
+  workflow_dispatch:
+    inputs:
+      preview:
+        description: Verify authorization and render without publishing
+        type: boolean
+        default: true
+concurrency:
+  group: clip-publisher
+  cancel-in-progress: false
+permissions:
+  contents: read
+jobs:
+  publish:
+    if: (github.event_name == 'workflow_dispatch' && inputs.preview) || vars.PUBLISH_ENABLED == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 8
+    steps:
+      - name: Check out private publisher
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          repository: ${{ vars.WORKER_REPO }}
+          ssh-key: ${{ secrets.WORKER_DEPLOY_KEY }}
+          path: publisher
+          ref: main
+      - name: Install renderer dependencies
+        working-directory: publisher
+        run: |
+          if ! command -v ffmpeg || [ ! -f /usr/share/fonts/truetype/liberation2/LiberationSans-Regular.ttf ]; then
+            sudo apt-get update -qq
+            sudo apt-get install -y -qq ffmpeg fonts-liberation2
+          fi
+          python3 -m venv "$RUNNER_TEMP/clip-venv"
+          "$RUNNER_TEMP/clip-venv/bin/python" -m pip install --quiet -r requirements-cloud.txt
+      - name: Restore publishing state
+        working-directory: publisher
+        run: |
+          git config user.name 'Kill the Busywork'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git fetch origin refs/heads/publisher-state:refs/remotes/origin/publisher-state
+          git worktree add --detach "$RUNNER_TEMP/clip-state" refs/remotes/origin/publisher-state
+      - name: Run the publisher
+        working-directory: publisher
+        env:
+          YOUTUBE_GRANT: ${{ secrets.YOUTUBE_GRANT_B64 }}
+          PREVIEW: ${{ github.event_name == 'workflow_dispatch' && inputs.preview }}
+        run: |
+          set -euo pipefail
+          umask 077
+          test -n "$YOUTUBE_GRANT"
+          export CLIP_OAUTH_FILE="$RUNNER_TEMP/clip-youtube-grant"
+          trap 'unlink "$CLIP_OAUTH_FILE"' EXIT
+          printf '%s' "$YOUTUBE_GRANT" | base64 --decode > "$CLIP_OAUTH_FILE"
+          unset YOUTUBE_GRANT
+          args=("$RUNNER_TEMP/clip-state")
+          if [ "$PREVIEW" = true ]; then args+=(--preview); fi
+          "$RUNNER_TEMP/clip-venv/bin/python" -u cloud_worker.py "${args[@]}"
+  record-activity:
+    needs: publish
+    if: github.event_name == 'schedule'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 2
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+      - name: Record a successful scheduled check once a month
+        run: |
+          date -u +%Y-%m > .last-scheduled-check
+          if git diff --quiet -- .last-scheduled-check; then exit 0; fi
+          git config user.name 'Kill the Busywork'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add .last-scheduled-check
+          git commit -m 'Record scheduled publisher activity'
+          git push
