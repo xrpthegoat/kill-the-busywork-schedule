@@ -1,0 +1,35 @@
+name: Publisher timer
+on:
+  workflow_dispatch:
+    inputs:
+      stage:
+        type: choice
+        options: [startup, confirm, steady]
+        default: steady
+concurrency:
+  group: publisher-timer
+  cancel-in-progress: false
+permissions: {}
+jobs:
+  tick:
+    if: github.ref_name == github.event.repository.default_branch && github.run_attempt == 1 && vars.PUBLISH_ENABLED == 'true'
+    environment:
+      name: ${{ inputs.stage == 'steady' && 'publisher-interval' || 'publisher-startup' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 3
+    permissions:
+      actions: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      REPOSITORY: ${{ github.repository }}
+      DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+      STAGE: ${{ inputs.stage }}
+    steps:
+      - name: Start the next publishing batch
+        run: gh workflow run publish.yml --repo "$REPOSITORY" --ref "$DEFAULT_BRANCH" -f preview=false
+      - name: Arm the next timer
+        if: always() && !cancelled()
+        run: |
+          next=steady
+          if [ "$STAGE" = startup ]; then next=confirm; fi
+          gh workflow run publisher-clock.yml --repo "$REPOSITORY" --ref "$DEFAULT_BRANCH" -f stage="$next"
